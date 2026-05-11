@@ -89,6 +89,43 @@ function isNetflixOrYoutube(event: ParsedEvent): boolean {
   return fields.some((f) => /netflix|youtube/i.test(f));
 }
 
+/**
+ * Merge overlapping/adjacent intervals into a minimal set of non-overlapping
+ * intervals. Input: array of [start_ms, end_ms]. Output: sorted merged array.
+ */
+function mergeIntervals(intervals: [number, number][]): [number, number][] {
+  if (intervals.length === 0) return [];
+  const sorted = [...intervals].sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [sorted[0]];
+  for (let i = 1; i < sorted.length; i++) {
+    const last = merged[merged.length - 1];
+    const cur = sorted[i];
+    if (cur[0] <= last[1]) {
+      // overlaps — extend
+      if (cur[1] > last[1]) last[1] = cur[1];
+    } else {
+      merged.push([cur[0], cur[1]]);
+    }
+  }
+  return merged;
+}
+
+/** Total overlap (ms) between interval [s,e] and a sorted merged interval list. */
+function overlapWithMerged(
+  s: number,
+  e: number,
+  merged: [number, number][],
+): number {
+  let total = 0;
+  for (const [ms, me] of merged) {
+    if (ms >= e) break; // merged list is sorted, no more overlaps possible
+    const oS = Math.max(s, ms);
+    const oE = Math.min(e, me);
+    if (oE > oS) total += oE - oS;
+  }
+  return total;
+}
+
 export function processData(
   windowEvents: EventRow[],
   afkEvents: EventRow[],
@@ -148,6 +185,22 @@ export function processData(
     inRange(e.timestamp.getTime(), e.duration),
   );
 
+  // Build merged not-afk intervals once (avoid O(n*m) double-counting)
+  const notAfkIntervals: [number, number][] = parsedAfk
+    .filter((a) => a.status === "not-afk")
+    .map((a) => [
+      a.timestamp.getTime(),
+      a.timestamp.getTime() + a.duration * 1000,
+    ]);
+  const mergedNotAfk = mergeIntervals(notAfkIntervals);
+
+  // Build merged all-afk intervals (for netflix/youtube events)
+  const allAfkIntervals: [number, number][] = parsedAfk.map((a) => [
+    a.timestamp.getTime(),
+    a.timestamp.getTime() + a.duration * 1000,
+  ]);
+  const mergedAllAfk = mergeIntervals(allAfkIntervals);
+
   // Only keep window events that intersect with a not-afk interval
   // OR are netflix/youtube (regardless of afk status)
   const activeWindowEvents: ParsedEvent[] = [];
@@ -156,50 +209,20 @@ export function processData(
     const wStart = wEv.timestamp.getTime();
     const wEnd = wStart + wEv.duration * 1000;
 
-    if (isNetflixOrYoutube(wEv)) {
-      // Accept if intersects with ANY afk event (afk or not-afk)
-      const intersects = parsedAfk.some((aEv) => {
-        const aStart = aEv.timestamp.getTime();
-        const aEnd = aStart + aEv.duration * 1000;
-        return wStart < aEnd && wEnd > aStart;
-      });
-      if (intersects) activeWindowEvents.push(wEv);
-    } else {
-      // Accept only if intersects with a not-afk interval
-      const intersects = parsedAfk.some((aEv) => {
-        if (aEv.status !== "not-afk") return false;
-        const aStart = aEv.timestamp.getTime();
-        const aEnd = aStart + aEv.duration * 1000;
-        return wStart < aEnd && wEnd > aStart;
-      });
-      if (intersects) activeWindowEvents.push(wEv);
+    const merged = isNetflixOrYoutube(wEv) ? mergedAllAfk : mergedNotAfk;
+    if (overlapWithMerged(wStart, wEnd, merged) > 0) {
+      activeWindowEvents.push(wEv);
     }
   }
 
-  // Compute clipped duration per event to not exceed active afk window
+  // Compute clipped duration per event using merged intervals (no double-counting)
   // Also: enrich URL from chrome web watcher (most accurate source)
   const clippedEvents = activeWindowEvents.map((wEv) => {
     const wStart = wEv.timestamp.getTime();
     const wEnd = wStart + wEv.duration * 1000;
 
-    let clippedMs = 0;
-
-    const relevantAfk = parsedAfk.filter((aEv) => {
-      if (isNetflixOrYoutube(wEv)) {
-        return true; // any afk status
-      }
-      return aEv.status === "not-afk";
-    });
-
-    for (const aEv of relevantAfk) {
-      const aStart = aEv.timestamp.getTime();
-      const aEnd = aStart + aEv.duration * 1000;
-      const overlapStart = Math.max(wStart, aStart);
-      const overlapEnd = Math.min(wEnd, aEnd);
-      if (overlapEnd > overlapStart) {
-        clippedMs += overlapEnd - overlapStart;
-      }
-    }
+    const merged = isNetflixOrYoutube(wEv) ? mergedAllAfk : mergedNotAfk;
+    const clippedMs = overlapWithMerged(wStart, wEnd, merged);
 
     // Find best-matching web event URL by maximum overlap
     let enrichedUrl = wEv.url ?? "";
