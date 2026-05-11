@@ -52,6 +52,21 @@ export interface ReportData {
   buckets: BucketRow[];
 }
 
+/** Returns the full date range of all window events in the raw data */
+export function getDataDateRange(
+  windowEvents: EventRow[],
+): { start: Date; end: Date } | null {
+  if (windowEvents.length === 0) return null;
+  let min = Infinity;
+  let max = -Infinity;
+  for (const e of windowEvents) {
+    const t = new Date(e.timestamp).getTime();
+    if (t < min) min = t;
+    if (t > max) max = t;
+  }
+  return { start: new Date(min), end: new Date(max) };
+}
+
 function parseDatastr(datastr: string): Record<string, string> {
   try {
     return JSON.parse(datastr);
@@ -68,6 +83,7 @@ function isNetflixOrYoutube(event: ParsedEvent): boolean {
 export function processData(
   windowEvents: EventRow[],
   afkEvents: EventRow[],
+  timeRange?: { start: Date; end: Date },
 ): ReportData {
   // Parse window events
   const parsedWindow: ParsedEvent[] = windowEvents.map((e) => {
@@ -84,7 +100,7 @@ export function processData(
   });
 
   // Parse afk events
-  const parsedAfk: ParsedEvent[] = afkEvents.map((e) => {
+  const parsedAfkAll: ParsedEvent[] = afkEvents.map((e) => {
     const data = parseDatastr(e.datastr);
     return {
       id: e.id,
@@ -95,11 +111,28 @@ export function processData(
     };
   });
 
+  // Apply time range filter
+  const rangeStart = timeRange?.start.getTime();
+  const rangeEnd = timeRange?.end.getTime();
+
+  const inRange = (ts: number, dur: number) => {
+    if (!rangeStart || !rangeEnd) return true;
+    const evEnd = ts + dur * 1000;
+    return ts < rangeEnd && evEnd > rangeStart;
+  };
+
+  const filteredWindow = parsedWindow.filter((e) =>
+    inRange(e.timestamp.getTime(), e.duration),
+  );
+  const parsedAfk = parsedAfkAll.filter((e) =>
+    inRange(e.timestamp.getTime(), e.duration),
+  );
+
   // Only keep window events that intersect with a not-afk interval
   // OR are netflix/youtube (regardless of afk status)
   const activeWindowEvents: ParsedEvent[] = [];
 
-  for (const wEv of parsedWindow) {
+  for (const wEv of filteredWindow) {
     const wStart = wEv.timestamp.getTime();
     const wEnd = wStart + wEv.duration * 1000;
 
@@ -195,10 +228,10 @@ export function processData(
     })
     .sort((a, b) => b.totalDuration - a.totalDuration);
 
-  // Date range from window events
+  // Date range from filtered window events
   let dateRange: { start: Date; end: Date } | null = null;
-  if (parsedWindow.length > 0) {
-    const timestamps = parsedWindow.map((e) => e.timestamp.getTime());
+  if (filteredWindow.length > 0) {
+    const timestamps = filteredWindow.map((e) => e.timestamp.getTime());
     dateRange = {
       start: new Date(Math.min(...timestamps)),
       end: new Date(Math.max(...timestamps)),
