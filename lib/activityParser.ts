@@ -194,23 +194,19 @@ export function processData(
     ]);
   const mergedNotAfk = mergeIntervals(notAfkIntervals);
 
-  // Build merged all-afk intervals (for netflix/youtube events)
-  const allAfkIntervals: [number, number][] = parsedAfk.map((a) => [
-    a.timestamp.getTime(),
-    a.timestamp.getTime() + a.duration * 1000,
-  ]);
-  const mergedAllAfk = mergeIntervals(allAfkIntervals);
-
-  // Only keep window events that intersect with a not-afk interval
-  // OR are netflix/youtube (regardless of afk status)
+  // Only keep window events that intersect with a not-afk interval.
+  // Netflix/YouTube events are always kept regardless of afk status.
   const activeWindowEvents: ParsedEvent[] = [];
 
   for (const wEv of filteredWindow) {
     const wStart = wEv.timestamp.getTime();
     const wEnd = wStart + wEv.duration * 1000;
 
-    const merged = isNetflixOrYoutube(wEv) ? mergedAllAfk : mergedNotAfk;
-    if (overlapWithMerged(wStart, wEnd, merged) > 0) {
+    if (isNetflixOrYoutube(wEv)) {
+      // Rule 3: Netflix/YouTube pass through regardless of afk status
+      activeWindowEvents.push(wEv);
+    } else if (overlapWithMerged(wStart, wEnd, mergedNotAfk) > 0) {
+      // Rules 1+2: must intersect with a not-afk interval
       activeWindowEvents.push(wEv);
     }
   }
@@ -221,8 +217,16 @@ export function processData(
     const wStart = wEv.timestamp.getTime();
     const wEnd = wStart + wEv.duration * 1000;
 
-    const merged = isNetflixOrYoutube(wEv) ? mergedAllAfk : mergedNotAfk;
-    const clippedMs = overlapWithMerged(wStart, wEnd, merged);
+    let clippedMs: number;
+    if (isNetflixOrYoutube(wEv)) {
+      // Netflix/YouTube: full duration, only clipped to the requested time range
+      const clampedStart = rangeStart ? Math.max(wStart, rangeStart) : wStart;
+      const clampedEnd = rangeEnd ? Math.min(wEnd, rangeEnd) : wEnd;
+      clippedMs = Math.max(0, clampedEnd - clampedStart);
+    } else {
+      // Regular events: clip to not-afk intervals
+      clippedMs = overlapWithMerged(wStart, wEnd, mergedNotAfk);
+    }
 
     // Find best-matching web event URL by maximum overlap
     let enrichedUrl = wEv.url ?? "";
