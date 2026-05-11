@@ -10,6 +10,7 @@ export type LoadState =
       status: "done";
       windowEvents: EventRow[];
       afkEvents: EventRow[];
+      webEvents: EventRow[];
       buckets: BucketRow[];
     }
   | { status: "error"; message: string };
@@ -49,7 +50,7 @@ export function useSQLiteLoader() {
         }
       }
 
-      // Find window bucket (aw-watcher-window) and afk bucket (aw-watcher-afk)
+      // Find window bucket, afk bucket, and chrome web watcher bucket
       const windowBucket = buckets.find(
         (b) =>
           b.client === "aw-watcher-window" ||
@@ -58,6 +59,13 @@ export function useSQLiteLoader() {
       const afkBucket = buckets.find(
         (b) =>
           b.client === "aw-watcher-afk" || b.id.startsWith("aw-watcher-afk"),
+      );
+      // Chrome web watcher — includes both "aw-watcher-web-chrome" and
+      // "aw-watcher-web-chrome_hostname" variants; excludes edge/firefox.
+      const webChromeBuckets = buckets.filter(
+        (b) =>
+          b.id.startsWith("aw-watcher-web-chrome") &&
+          !b.id.startsWith("aw-watcher-web-chrome_web"),
       );
 
       if (!windowBucket || !afkBucket) {
@@ -84,9 +92,20 @@ export function useSQLiteLoader() {
       const windowEvents = queryEvents(windowBucket.key);
       const afkEvents = queryEvents(afkBucket.key);
 
+      // Merge events from all chrome web watcher buckets
+      const webEvents: EventRow[] = webChromeBuckets.flatMap((b) =>
+        queryEvents(b.key),
+      );
+
       db.close();
 
-      setLoadState({ status: "done", windowEvents, afkEvents, buckets });
+      setLoadState({
+        status: "done",
+        windowEvents,
+        afkEvents,
+        webEvents,
+        buckets,
+      });
     } catch (err) {
       setLoadState({
         status: "error",

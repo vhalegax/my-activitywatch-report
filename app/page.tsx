@@ -123,9 +123,7 @@ function TitleRow({
         onClick={() => hasUrls && setOpen((o) => !o)}
         className={cn(
           "w-full flex flex-col gap-1.5 px-3 py-2 rounded-md text-left transition-colors",
-          hasUrls
-            ? "hover:bg-muted/60 cursor-pointer"
-            : "cursor-default",
+          hasUrls ? "hover:bg-muted/60 cursor-pointer" : "cursor-default",
         )}
       >
         <div className="flex items-center justify-between gap-2">
@@ -157,8 +155,10 @@ function TitleRow({
         </div>
       </button>
       {open && hasUrls && (
-        <div className="pl-4 border-l-2 ml-4 mt-0.5 space-y-0.5 pb-1"
-          style={{ borderColor: `${color}40` }}>
+        <div
+          className="pl-4 border-l-2 ml-4 mt-0.5 space-y-0.5 pb-1"
+          style={{ borderColor: `${color}40` }}
+        >
           {group.urls.map((u) => (
             <UrlRow
               key={u.url}
@@ -211,14 +211,17 @@ function AppCard({
           {/* App name + time */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between gap-2">
-              <span className="font-semibold text-sm truncate">{group.app}</span>
+              <span className="font-semibold text-sm truncate">
+                {group.app}
+              </span>
               <div className="flex items-center gap-2 shrink-0">
-                <span className="text-sm font-mono font-semibold" style={{ color }}>
+                <span
+                  className="text-sm font-mono font-semibold"
+                  style={{ color }}
+                >
                   {formatDuration(group.totalDuration)}
                 </span>
-                <span
-                  className="text-xs text-muted-foreground px-1.5 py-0.5 rounded-full bg-muted"
-                >
+                <span className="text-xs text-muted-foreground px-1.5 py-0.5 rounded-full bg-muted">
                   {pct.toFixed(0)}%
                 </span>
                 <span className="text-muted-foreground text-xs">
@@ -291,7 +294,9 @@ function UploadZone({ onFile }: { onFile: (f: File) => void }) {
           📊
         </div>
         <div className="text-center space-y-1">
-          <p className="text-lg font-semibold">Drop ActivityWatch SQLite file</p>
+          <p className="text-lg font-semibold">
+            Drop ActivityWatch SQLite file
+          </p>
           <p className="text-sm text-muted-foreground">
             Supports .db, .sqlite, .sqlite3
           </p>
@@ -350,7 +355,10 @@ function StatsRow({
         },
         {
           label: "Events",
-          value: eventCount > 999 ? `${(eventCount / 1000).toFixed(1)}k` : eventCount.toString(),
+          value:
+            eventCount > 999
+              ? `${(eventCount / 1000).toFixed(1)}k`
+              : eventCount.toString(),
           sub: "window events",
           color: "#10b981",
         },
@@ -512,7 +520,12 @@ export default function Home() {
 
   const report = useMemo(() => {
     if (loadState.status !== "done") return null;
-    return processData(loadState.windowEvents, loadState.afkEvents, timeRange);
+    return processData(
+      loadState.windowEvents,
+      loadState.afkEvents,
+      timeRange,
+      loadState.webEvents,
+    );
   }, [loadState, timeRange]);
 
   const handleTimeChange = useCallback(
@@ -536,7 +549,9 @@ export default function Home() {
               📊
             </div>
             <div>
-              <h1 className="text-sm font-bold leading-none">Activity Report</h1>
+              <h1 className="text-sm font-bold leading-none">
+                Activity Report
+              </h1>
               <p className="text-[11px] text-muted-foreground mt-0.5">
                 ActivityWatch · SQLite
               </p>
@@ -581,7 +596,9 @@ export default function Home() {
               ⚠️
             </div>
             <div className="text-center space-y-1">
-              <p className="font-semibold text-destructive">Failed to load file</p>
+              <p className="font-semibold text-destructive">
+                Failed to load file
+              </p>
               <p className="text-sm text-muted-foreground max-w-sm">
                 {loadState.message}
               </p>

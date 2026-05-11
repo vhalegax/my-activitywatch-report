@@ -52,6 +52,15 @@ export interface ReportData {
   buckets: BucketRow[];
 }
 
+/**
+ * SQLite stores timestamps as "2026-05-09 04:31:31.990000+00:00" (space, not T).
+ * Replace the first space with T so Date() parses it as proper ISO 8601 UTC.
+ */
+function parseTimestamp(ts: string): Date {
+  // Only replace the first space (between date and time part)
+  return new Date(ts.replace(" ", "T"));
+}
+
 /** Returns the full date range of all window events in the raw data */
 export function getDataDateRange(
   windowEvents: EventRow[],
@@ -60,7 +69,7 @@ export function getDataDateRange(
   let min = Infinity;
   let max = -Infinity;
   for (const e of windowEvents) {
-    const t = new Date(e.timestamp).getTime();
+    const t = parseTimestamp(e.timestamp).getTime();
     if (t < min) min = t;
     if (t > max) max = t;
   }
@@ -84,14 +93,15 @@ export function processData(
   windowEvents: EventRow[],
   afkEvents: EventRow[],
   timeRange?: { start: Date; end: Date },
+  webEvents?: EventRow[],
 ): ReportData {
-  // Parse window events
+  // Parse window events — note: url here is from window watcher (less reliable)
   const parsedWindow: ParsedEvent[] = windowEvents.map((e) => {
     const data = parseDatastr(e.datastr);
     return {
       id: e.id,
       bucket_id: e.bucket_id,
-      timestamp: new Date(e.timestamp),
+      timestamp: parseTimestamp(e.timestamp),
       duration: e.duration,
       app: data.app,
       title: data.title,
@@ -105,9 +115,19 @@ export function processData(
     return {
       id: e.id,
       bucket_id: e.bucket_id,
-      timestamp: new Date(e.timestamp),
+      timestamp: parseTimestamp(e.timestamp),
       duration: e.duration,
       status: data.status,
+    };
+  });
+
+  // Parse web watcher events (chrome extension — more accurate URLs)
+  const parsedWeb = (webEvents ?? []).map((e) => {
+    const data = parseDatastr(e.datastr);
+    return {
+      ts: parseTimestamp(e.timestamp).getTime(),
+      dur: e.duration,
+      url: data.url ?? "",
     };
   });
 
@@ -157,6 +177,7 @@ export function processData(
   }
 
   // Compute clipped duration per event to not exceed active afk window
+  // Also: enrich URL from chrome web watcher (most accurate source)
   const clippedEvents = activeWindowEvents.map((wEv) => {
     const wStart = wEv.timestamp.getTime();
     const wEnd = wStart + wEv.duration * 1000;
@@ -180,8 +201,26 @@ export function processData(
       }
     }
 
+    // Find best-matching web event URL by maximum overlap
+    let enrichedUrl = wEv.url ?? "";
+    if (parsedWeb.length > 0) {
+      const wStart = wEv.timestamp.getTime();
+      const wEnd = wStart + wEv.duration * 1000;
+      let bestOverlap = 0;
+      for (const wb of parsedWeb) {
+        const wbEnd = wb.ts + wb.dur * 1000;
+        const oStart = Math.max(wStart, wb.ts);
+        const oEnd = Math.min(wEnd, wbEnd);
+        if (oEnd > oStart && oEnd - oStart > bestOverlap && wb.url) {
+          bestOverlap = oEnd - oStart;
+          enrichedUrl = wb.url;
+        }
+      }
+    }
+
     return {
       ...wEv,
+      url: enrichedUrl,
       clippedDuration: clippedMs / 1000,
     };
   });
@@ -228,7 +267,7 @@ export function processData(
     })
     .sort((a, b) => b.totalDuration - a.totalDuration);
 
-  // Date range from filtered window events
+  // Date range from filtered window events (already parsed as UTC-correct local Date)
   let dateRange: { start: Date; end: Date } | null = null;
   if (filteredWindow.length > 0) {
     const timestamps = filteredWindow.map((e) => e.timestamp.getTime());
