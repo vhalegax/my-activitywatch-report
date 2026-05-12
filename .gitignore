@@ -38,4 +38,11 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
+
+# ActivityWatch source folders (reference only, not part of this project)
+.aw-core-master/
+.aw-webui-master/
+
+# Dummy/test data
+dummy/
 next-env.d.ts
