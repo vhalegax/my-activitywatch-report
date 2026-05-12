@@ -90,6 +90,41 @@ function isNetflixOrYoutube(event: ParsedEvent): boolean {
 }
 
 /**
+ * Fills gaps ≤ pulsetime seconds between consecutive events, matching AW's flood().
+ * Adjacent events: if gap ≤ pulsetime, the longer event is extended to cover the gap.
+ * Same-data adjacent events (same app/status) with negative gaps are merged.
+ */
+function floodEvents(events: ParsedEvent[], pulsetime = 5): ParsedEvent[] {
+  if (events.length === 0) return events;
+  const sorted = events
+    .map((e) => ({ ...e, timestamp: new Date(e.timestamp) }))
+    .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const e1 = sorted[i];
+    const e2 = sorted[i + 1];
+    const e1EndMs = e1.timestamp.getTime() + e1.duration * 1000;
+    const gapMs = e2.timestamp.getTime() - e1EndMs;
+
+    if (gapMs <= 0 || gapMs > pulsetime * 1000) continue;
+
+    // Fill the gap: extend the longer event toward the shorter one
+    if (e1.duration >= e2.duration) {
+      // e1 is longer: extend e1 to start of e2
+      e1.duration = (e2.timestamp.getTime() - e1.timestamp.getTime()) / 1000;
+    } else {
+      // e2 is longer: extend e2 backwards to end of e1
+      const newDur =
+        (e2.timestamp.getTime() + e2.duration * 1000 - e1EndMs) / 1000;
+      e2.timestamp = new Date(e1EndMs);
+      e2.duration = newDur;
+    }
+  }
+
+  return sorted.filter((e) => e.duration > 0);
+}
+
+/**
  * Merge overlapping/adjacent intervals into a minimal set of non-overlapping
  * intervals. Input: array of [start_ms, end_ms]. Output: sorted merged array.
  */
@@ -126,11 +161,23 @@ function overlapWithMerged(
   return total;
 }
 
+export type ProcessingMode = "aw" | "custom";
+
+/**
+ * mode "aw"     — matches ActivityWatch behaviour:
+ *   - flood() fills ≤5s gaps between events
+ *   - YouTube/Netflix NOT exempt (treated same as other apps, must intersect not-afk)
+ *
+ * mode "custom" — our extended behaviour:
+ *   - no flood()
+ *   - YouTube/Netflix exempt from AFK filter (always included with full duration)
+ */
 export function processData(
   windowEvents: EventRow[],
   afkEvents: EventRow[],
   timeRange?: { start: Date; end: Date },
   webEvents?: EventRow[],
+  mode: ProcessingMode = "custom",
 ): ReportData {
   // Parse window events — note: url here is from window watcher (less reliable)
   const parsedWindow: ParsedEvent[] = windowEvents.map((e) => {
@@ -178,10 +225,15 @@ export function processData(
     return ts < rangeEnd && evEnd > rangeStart;
   };
 
-  const filteredWindow = parsedWindow.filter((e) =>
+  // Both modes: flood() fills ≤5s gaps between events.
+  // Switching tabs/apps within 5s = still active, not a break.
+  const windowToFilter = floodEvents(parsedWindow);
+  const afkToFilter = floodEvents(parsedAfkAll);
+
+  const filteredWindow = windowToFilter.filter((e) =>
     inRange(e.timestamp.getTime(), e.duration),
   );
-  const parsedAfk = parsedAfkAll.filter((e) =>
+  const parsedAfk = afkToFilter.filter((e) =>
     inRange(e.timestamp.getTime(), e.duration),
   );
 
@@ -194,19 +246,20 @@ export function processData(
     ]);
   const mergedNotAfk = mergeIntervals(notAfkIntervals);
 
-  // Only keep window events that intersect with a not-afk interval.
-  // Netflix/YouTube events are always kept regardless of afk status.
+  // Keep window events that pass the AFK filter.
+  // custom mode: Netflix/YouTube always pass through regardless of AFK status.
+  // aw mode: Netflix/YouTube treated same as other apps (must intersect not-afk).
   const activeWindowEvents: ParsedEvent[] = [];
 
   for (const wEv of filteredWindow) {
     const wStart = wEv.timestamp.getTime();
     const wEnd = wStart + wEv.duration * 1000;
 
-    if (isNetflixOrYoutube(wEv)) {
-      // Rule 3: Netflix/YouTube pass through regardless of afk status
+    if (mode === "custom" && isNetflixOrYoutube(wEv)) {
+      // Custom rule: Netflix/YouTube pass through regardless of afk status
       activeWindowEvents.push(wEv);
     } else if (overlapWithMerged(wStart, wEnd, mergedNotAfk) > 0) {
-      // Rules 1+2: must intersect with a not-afk interval
+      // Must intersect with a not-afk interval
       activeWindowEvents.push(wEv);
     }
   }
@@ -218,13 +271,13 @@ export function processData(
     const wEnd = wStart + wEv.duration * 1000;
 
     let clippedMs: number;
-    if (isNetflixOrYoutube(wEv)) {
-      // Netflix/YouTube: full duration, only clipped to the requested time range
+    if (mode === "custom" && isNetflixOrYoutube(wEv)) {
+      // Custom mode: Netflix/YouTube use full duration clipped to time range only
       const clampedStart = rangeStart ? Math.max(wStart, rangeStart) : wStart;
       const clampedEnd = rangeEnd ? Math.min(wEnd, rangeEnd) : wEnd;
       clippedMs = Math.max(0, clampedEnd - clampedStart);
     } else {
-      // Regular events: clip to not-afk intervals
+      // AW mode (all events) or custom mode (non-Netflix/YouTube): clip to not-afk
       clippedMs = overlapWithMerged(wStart, wEnd, mergedNotAfk);
     }
 
